@@ -1,0 +1,89 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+---
+description: Defines overall coding style guidelines for C and bash files in a large project, emphasizing readability, consistency, and practices that promote code safety and maintainability.
+globs: ["*.c", "*.h", "*.sh"]
+alwaysApply: true
+---
+
+- **Indentation and Spacing**:
+  - Use 4 spaces for indentation in C source (`.c`) and header (`.h`) files.
+  - Use 2 spaces for indentation in bash scripts (`.sh`).
+  - Use consistent spacing around operators, keywords, and function calls.
+  - Example C:
+    c
+    int main(int argc, char *argv[]) {
+        if (argc > 1) {
+            // Code here
+        }
+        return 0;
+    }
+    
+  - Example Bash:
+    bash
+    #!/bin/bash
+    if [ -z "$VAR" ]; then
+      echo "VAR is empty"
+    fi
+    
+
+- **Bracing Style (C)**:
+  - Use the K&R style for brace placement: opening brace on the same line as the control statement, closing brace on its own line.
+  - Example:
+    c
+    void myFunction() {
+        if (condition) {
+            // ...
+        } else {
+            // ...
+        }
+    }
+    
+
+- **Line Length**:
+  - Limit line length to a maximum of 80 characters to improve readability on various screens and in diff tools. Break longer lines logically.
+
+- **Function Length and Structure**:
+  - Keep functions short and focused, ideally performing a single, well-defined task.
+  - For C, define function prototypes in header files (`.h`) and implementations in source files (`.c`).
+
+- **Variable Naming and Scope**:
+  - Use descriptive names for variables, functions, and macros.
+  - For C, use `snake_case` for variable and function names. Use `UPPER_CASE` for macros and constants. Declare variables close to their first use where possible, or at the beginning of a block if required by older C standards, but do so consistently.
+  - For Bash, use `snake_case` or `camelCase` for script variables, and `UPPER_CASE` for environment variables.
+  - Clearly define variable scope to avoid unintended side effects.
+
+- **Commenting**:
+  - Write clear, concise comments explaining the purpose of functions, complex logic blocks, important data structures, and any non-obvious implementation details.
+  - Use block comments (`/* ... */`) for multi-line explanations and function headers in C.
+  - Use single-line comments (`//` in C, `#` in bash) for inline explanations.
+
+- **Memory Management (C)**:
+  - Be diligent with dynamic memory allocation (`malloc`, `calloc`, `realloc`) and deallocation (`free`).
+  - Always check the return value of memory allocation functions for `NULL`.
+  - Ensure every `malloc` has a corresponding `free` call on all execution paths to prevent memory leaks. Document memory ownership if transferred between functions.
+
+- **Type Safety and Portability (C)**:
+  - Use fixed-width integer types (`int32_t`, `uint64_t`, etc.) from `<stdint.h>` when specific data widths are required, especially when dealing with data that might be serialized or used across different architectures (32-bit vs 64-bit).
+  - Avoid assumptions about the size of standard types (`int`, `long`) where portability is critical.
+  - Use explicit type casting when necessary and understand the potential implications.
+
+- **Error Handling**:
+  - Check return codes and error indicators from function calls, especially system calls and I/O operations.
+  - Handle errors gracefully, providing informative error messages where appropriate.
+
+- **Include Guards (C)**:
+  - Always use include guards (`#ifndef`, `#define`, `#endif`) in header files (`.h`) to prevent multiple inclusions.
+
+- **Bash Scripting Practices**:
+  - Start all bash scripts with a shebang (`#!/bin/bash`).
+  - Use `set -euo pipefail` at the beginning of scripts for safer execution (exit on error, unset variables, pipeline errors).
+  - Always quote variables (`"$my_var"`) unless word splitting or globbing is explicitly intended.
+
+- **Code Readability for Large Projects**:
+  - Structure files and directories logically.
+  - Minimize global variables; pass data explicitly through function arguments.
+  - Ensure consistent formatting and style throughout the entire codebase to make navigation and understanding easier.

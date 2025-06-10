@@ -1,0 +1,36 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+I'd like you to analyze the [MODULE_NAME] module in our embedded C project to help build your understanding of it. Please:
+
+1. First, examine the directory structure of this module:
+   - Look through all files in the [PATH_TO_MODULE] directory
+   - Identify header files, implementation files, and their relationships
+
+2. Analyze the public interface:
+   - Identify all public functions/APIs in the header files
+   - Document their purposes, parameters, and return values
+   - Note any data structures exposed by the module
+3. Understand the implementation details:
+   - Identify key internal functions and their purposes
+   - Map out data flow through the module
+   - Determine initialization and cleanup sequences
+   - Note any hardware dependencies or special requirements
+
+4. Document the module's relationships:
+   - Identify which other modules this one depends on
+   - Note which modules depend on this one
+   - Document any shared resources or potential conflicts
+
+5. Catalog error handling patterns:
+   - How does this module report errors?
+   - What recovery mechanisms are implemented?
+   - Are there any critical failure points?
+6. Generate a concise module summary that includes:
+   - The module's primary purpose
+   - Key responsibilities
+   - Important dependencies
+   - Typical usage patterns
+   - Any special considerations

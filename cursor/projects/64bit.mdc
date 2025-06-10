@@ -1,0 +1,434 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: C language coding standards and guidelines for ensuring 32-bit and 64-bit portability, addressing common data type size, pointer handling, and arithmetic issues.
+globs: ["*.c", "*.h"]
+alwaysApply: true
+---
+# C Coding Standards: 32/64-bit Portability
+
+## Overview
+
+This document outlines critical C programming practices to ensure code is robust, portable, and correct across both 32-bit and 64-bit architectures. Adherence to these rules will minimize common pitfalls related to data type sizes, pointer handling, integer arithmetic, and other architecture-dependent behaviors.
+
+**Summary of Key Differences and Issues:**
+
+When transitioning C code between 32-bit and 64-bit architectures, or writing portable code, several potential issues arise primarily due to changes in the sizes of fundamental data types. The most significant differences are:
+
+1.  **Pointer Sizes**: Pointers are 32 bits (4 bytes) on 32-bit systems and 64 bits (8 bytes) on 64-bit systems.
+2.  **`long` Type Size**: The `long` type is typically 32 bits on 32-bit systems. On 64-bit systems, its size varies: 64 bits on Unix-like systems (Linux, macOS - LP64 model) but remains 32 bits on 64-bit Windows (LLP64 model).
+3.  **`size_t` and `ptrdiff_t`**: These types adapt to the architecture: `size_t` (for object sizes) and `ptrdiff_t` (for pointer differences) are 32-bit on 32-bit systems and 64-bit on 64-bit systems.
+
+These fundamental changes can lead to issues like:
+*   Integer truncation (especially when casting pointers to `int`).
+*   Incorrect `printf`/`scanf` format specifiers.
+*   Changes in data structure sizes and alignment, affecting file I/O and network communication.
+*   Problems with pointer arithmetic if incorrect assumptions are made.
+*   Unexpected behavior with integer promotion rules when mixing types of different sizes.
+
+## Introduction to 32-bit vs. 64-bit Data Models
+
+In C programming, "32-bit" and "64-bit" primarily refer to the architecture of the system your program runs on. This impacts memory addressing, register sizes, and crucially, the default sizes of integer and pointer types. Different operating systems on 64-bit hardware adopt different "data models":
+
+*   **ILP32**: `int`, `long`, and pointers are 32-bit. (Typical for 32-bit systems)
+*   **LP64**: `int` is 32-bit; `long` and pointers are 64-bit. (Typical for 64-bit Unix-like systems like Linux, macOS)
+*   **LLP64**: `int` and `long` are 32-bit; `long long` and pointers are 64-bit. (Typical for 64-bit Windows)
+
+Understanding these differences is crucial for writing portable and correct C code.
+
+## Potential Issues and Rules
+
+Here are common issues and rules to mitigate them:
+
+### 1. Size Mismatches: `int` vs. `long` vs. Pointers
+
+*   **Explanation**:
+    *   `int`: Commonly 32 bits on both 32-bit and most 64-bit systems.
+    *   `long`: 32 bits on 32-bit systems. On 64-bit, 64 bits (LP64) or 32 bits (LLP64).
+    *   Pointers (`void *`): 32 bits on 32-bit systems, 64 bits on 64-bit systems.
+    *   `size_t`, `ptrdiff_t`: Adapt to architecture (32-bit or 64-bit).
+*   **Why it's a problem**:
+    *   **Pointer Truncation**: Storing an 8-byte pointer (64-bit system) in a 4-byte `int` truncates the address.
+    *   **`long` Portability**: Code using `long` for 64-bit values on LP64 systems will fail on LLP64 systems.
+    *   **Type Equivalence Assumptions**: `sizeof(int) == sizeof(long)` or `sizeof(int) == sizeof(void*)` are not universally true.
+*   **Rule 1.1 (Pointer to Integer Conversion)**:
+    **NEVER** cast a pointer to `int` or `long` for storage or arithmetic. If pointer-to-integer conversion is essential, **ALWAYS** cast to `uintptr_t` or `intptr_t` (from `<stdint.h>`).
+*   **Rule 1.2 (64-bit Integer Types)**:
+    For values that must be 64-bit, use `long long` or `int64_t`/`uint64_t` from `<stdint.h>`.
+*   **Rule 1.3 (Semantic Types for Sizes/Differences)**:
+    Use `size_t` for array sizes, object counts, and memory allocation sizes. Use `ptrdiff_t` for differences between pointers.
+*   **Example (Pointer Truncation - Bad Practice)**:
+    ```c
+    // From 64bit_issue_rule.txt: 3.1.3.1
+    short *ptr_example;
+    // int n = (int) ptr_example + 2; // DANGEROUS: Truncation on 64-bit.
+    // ptr_example = (short *) n;    // DANGEROUS: Uses truncated value.
+    ```
+*   **Example (Pointer Truncation - Good Practice)**:
+    ```c
+    #include <stdint.h>
+    short *ptr_example;
+    uintptr_t numeric_handle = (uintptr_t)ptr_example;
+    numeric_handle += (2 * sizeof(short)); // Example arithmetic on the handle
+    ptr_example = (short *)numeric_handle;
+    ```
+*   **Example (Demonstrating type sizes)**:
+    ```c
+    #include <stdio.h>
+    #include <stdint.h> // For uintptr_t (C99 and later)
+
+    int main() {
+        int data_variable = 42;
+        int *ptr_to_data = &data_variable;
+
+        printf("Size of int: %zu bytes\n", sizeof(int));
+        printf("Size of long: %zu bytes\n", sizeof(long));
+        printf("Size of void*: %zu bytes\n", sizeof(void*));
+        printf("Size of uintptr_t: %zu bytes\n", sizeof(uintptr_t));
+
+        // SAFER: Use uintptr_t for integer representation of pointers
+        uintptr_t pointer_as_uintptr = (uintptr_t)ptr_to_data;
+        printf("Pointer stored as uintptr_t: 0x%lx\n", (unsigned long)pointer_as_uintptr);
+
+        int *restored_ptr_from_uintptr = (int*)pointer_as_uintptr;
+        if ((void*)restored_ptr_from_uintptr == (void*)ptr_to_data) {
+            printf("Value through uintptr_t-cast pointer: %d\n", *restored_ptr_from_uintptr);
+        }
+        return 0;
+    }
+    ```
+
+### 2. Integer Truncation (General)
+
+*   **Explanation**: Assigning a value from a larger integer type to a smaller one can cause loss of most significant bits.
+*   **Why it's a problem**: Data loss, incorrect calculations, buffer overflows.
+*   **Rule 2.1 (Avoid Unchecked Narrowing Conversions)**:
+    Avoid direct assignment or implicit conversion of wider integer types to narrower ones without explicit, justifiable, and safe range checking or when truncation is the desired, well-understood behavior.
+*   **Rule 2.2 (Use Appropriate Sized Types)**:
+    Use data types guaranteed to hold the expected range (e.g., `long long`, `uint64_t`, `size_t`).
+*   **Rule 2.3 (Enable Compiler Warnings)**:
+    Enable `-Wconversion` to detect potential truncations.
+*   **Example (long to int truncation - Bad Practice)**:
+    ```c
+    // From 64bit_issue_rule.txt: 3.1.3.2
+    // void long_to_int_assignment_truncation_03(long long1, long long2, long long3)
+    // {
+    //     int int1, int2=2, int3;
+    //     int1 = long1; // DANGEROUS: direct assignment, potential truncation
+    //     int2 = int2 * long2; // DANGEROUS: expression, potential truncation
+    //     // int3 = retlong(long3); // DANGEROUS: argument pass/return, potential truncation.
+    //     // Assume retlong returns long
+    //     printf("int1:%d, int2:%d, int3:%d\n", int1, int2, int3);
+    // }
+    ```
+*   **Example (Integer Truncation - Good Practice with check)**:
+    ```c
+    #include <stdio.h>
+    #include <limits.h>
+
+    void process_large_value(long long large_val) {
+        int int_val;
+        if (large_val >= INT_MIN && large_val <= INT_MAX) {
+            int_val = (int)large_val;
+            printf("Converted value: %d\n", int_val);
+        } else {
+            printf("Error: Value %lld cannot be safely converted to int.\n", large_val);
+        }
+    }
+    ```
+
+### 3. Format Specifiers in `printf` and `scanf`
+
+*   **Explanation**: Mismatched format specifiers and argument types lead to undefined behavior.
+*   **Why it's a problem**: Incorrect output/input, crashes, security vulnerabilities.
+*   **Rule 3.1 (Use Correct Format Specifiers)**:
+    **ALWAYS** use format specifiers matching argument types:
+    *   `size_t`: `%zu`
+    *   `ptrdiff_t`: `%td`
+    *   `void*`: `%p` (cast argument to `(void*)`)
+    *   `long`: `%ld` (signed), `%lu` (unsigned)
+    *   `long long`: `%lld` (signed), `%llu` (unsigned)
+    *   `<stdint.h>` types: Use macros from `<inttypes.h>` (e.g., `PRId64`).
+*   **Example (Format Specifier - Bad Practice)**:
+    ```c
+    // From 64bit_issue_rule.txt: 3.1.3.15
+    // void format_specifier_truncation_17(void *p)
+    // {
+    //     // printf("size:%u", sizeof(int)); // BAD: sizeof returns size_t, %u expects unsigned int
+    //     // printf("address:%x", (void *)p); // BAD: %x expects unsigned int, %p is for pointers
+    // }
+    ```
+*   **Example (Format Specifier - Good Practice)**:
+    ```c
+    #include <stdio.h>
+    #include <stddef.h>
+    #include <stdint.h>
+    #include <inttypes.h>
+
+    void display_info(size_t count, void *mem_address, int64_t value) {
+        printf("Count: %zu, Address: %p, Value: %" PRId64 "\n",
+               count, mem_address, value);
+    }
+    ```
+
+### 4. Data Structure Alignment, Padding, and Serialization
+
+*   **Explanation**: Compilers insert padding in structs for alignment, changing `sizeof(struct)` and member offsets based on architecture.
+*   **Why it's a problem**:
+    *   `sizeof(struct)` varies.
+    *   Direct binary I/O of structs is non-portable.
+    *   Hardcoded member offsets break.
+*   **Rule 4.1 (No Raw Struct I/O)**:
+    For file/network I/O, **ALWAYS** serialize/deserialize each member individually in a defined order and format. **DO NOT** `fwrite`/`fread` entire structs.
+*   **Rule 4.2 (Awareness of Size/Offset Changes)**:
+    Do not assume `sizeof(struct)` or `offsetof()` results are constant.
+*   **Rule 4.3 (Packed Structs with Caution)**:
+    Use compiler-specific packing (`__attribute__((packed))`, `#pragma pack`) only when essential and with full understanding of alignment implications.
+*   **Example (Struct size and alignment - Demonstration)**:
+    ```c
+    #include <stdio.h>
+    #include <stddef.h>
+
+    struct ExampleStruct { // From 64bit_issue_rule.txt: 3.1.3.11 (alignment_bad)
+        int a;      // 4 bytes
+        void *ptr;  // 4 bytes on 32-bit, 8 bytes on 64-bit
+        int b;      // 4 bytes
+    };
+    // On LP64: sizeof might be 24 (4 (a) + 4 (pad) + 8 (ptr) + 4 (b) + 4 (pad_end))
+    // On ILP32: sizeof might be 12 (4 (a) + 4 (ptr) + 4 (b))
+
+    struct BetterStruct { // From 64bit_issue_rule.txt: 3.1.3.11 (alignment_better)
+        void *ptr;
+        int a;
+        int b;
+    };
+    // On LP64: sizeof might be 16 (8 (ptr) + 4 (a) + 4 (b))
+
+    int main() {
+        printf("sizeof(struct ExampleStruct): %zu bytes\n", sizeof(struct ExampleStruct));
+        printf("Offset of ptr in ExampleStruct: %zu\n", offsetof(struct ExampleStruct, ptr));
+        printf("sizeof(struct BetterStruct): %zu bytes\n", sizeof(struct BetterStruct));
+        printf("Offset of a in BetterStruct: %zu\n", offsetof(struct BetterStruct, a));
+        return 0;
+    }
+    ```
+
+### 5. Pointer Arithmetic
+
+*   **Explanation**: `ptr + 1` is portable. Issues arise from casting pointers to `int` for arithmetic or assuming pointer differences fit in `int`.
+*   **Why it's a problem**: Truncated pointer values if cast to smaller integers.
+*   **Rule 5.1 (Use `ptrdiff_t` for Pointer Differences)**:
+    Store results of pointer subtraction in `ptrdiff_t`.
+*   **Rule 5.2 (Integer Arithmetic on Pointers via `uintptr_t`)**:
+    If arithmetic on pointer values as integers is needed, cast to `uintptr_t`/`intptr_t`, perform byte-offset arithmetic, then cast back.
+*   **Example (Pointer Arithmetic)**:
+    ```c
+    #include <stdio.h>
+    #include <stdint.h>
+    #include <stddef.h>
+
+    int main() {
+        int array[10];
+        int *p1 = &array[0];
+        int *p2 = &array[5];
+
+        ptrdiff_t diff_elements = p2 - p1; // Correct: 5 elements
+        printf("Element difference: %td\n", diff_elements);
+
+        // If manual byte offset arithmetic is needed
+        uintptr_t p1_addr = (uintptr_t)p1;
+        p1_addr += 3 * sizeof(int); // Move by 3 int elements
+        int *p3 = (int *)p1_addr;
+
+        printf("p1: %p, p1+3: %p, p3: %p\n", (void*)p1, (void*)(p1+3), (void*)p3);
+        return 0;
+    }
+    ```
+
+### 6. Integer Promotion Rules and Mixed-Type Operations
+
+*   **Explanation**: Implicit type promotions (e.g., `char` to `int`, signed to unsigned) can cause unexpected behavior in expressions.
+*   **Why it's a problem**: `-1 > 10U` can be true if `-1` (int) promotes to a large `unsigned int`.
+*   **Rule 6.1 (Careful with Signed/Unsigned Mixing)**:
+    Be extremely cautious. Enable compiler warnings like `-Wsign-compare`.
+*   **Rule 6.2 (Explicit Casting for Clarity)**:
+    Use explicit casts to clarify intent if implicit rules are not desired.
+    *   **Sign Loss (Ref: 64bit_issue_rule.txt 3.1.3.3)**: If a signed operand (e.g. `int b`) needs to maintain its sign when operated with an unsigned type (`unsigned int c`) and stored in a wider signed type (`long a`), cast the signed operand to the wider signed type *first*.
+        ```c
+        // Bad: a = b + c; -> b promotes to unsigned int first
+        // Good: a = (long)b + c; -> b becomes long, c promotes to long
+        ```
+    *   **Sign Extension from Smaller Unsigned Types (Ref: 64bit_issue_rule.txt 3.1.3.4)**: When a small unsigned type (e.g., `unsigned short`) is promoted to `int` and then to a wider unsigned type (e.g. `unsigned long`), unwanted sign extension can occur if the intermediate `int` is negative. Cast the small unsigned type to the target wider unsigned type *before* operations like shifting if this is an issue.
+        ```c
+        // unsigned short us = 0x8000U;
+        // Bad: unsigned long ul = us << 16; // us->int (0x8000), int<<16 -> int(0x80000000), int->ulong (0xFFFFFFFF80000000UL)
+        // Good: unsigned long ul = ((unsigned long)us) << 16; // us->ulong (0x8000UL), ulong<<16 -> ulong (0x80000000UL)
+        ```
+*   **Example (Sign Loss)**:
+    ```c
+    #include <stdio.h>
+    int main() {
+        long a;
+        int b = -2;
+        unsigned int c = 1U;
+        // Potentially problematic: b promotes to unsigned int, then sum, then to long
+        // a = b + c; // On LP64, a might be 0x00000000FFFFFFFFUL
+        // printf("a (b+c): %ld (0x%lX)\n", a, a);
+
+        // Corrected:
+        a = (long)b + c; // b becomes long, c promotes to long, sum is long
+                         // a becomes -1L (0xFFFFFFFFFFFFFFFFL on LP64)
+        printf("a ((long)b+c): %ld (0x%lX)\n", a, a);
+        return 0;
+    }
+    ```
+
+### 7. Integer Constants: Suffixes, Overflow, and Assumed Widths
+
+*   **Explanation**: Constants without suffixes might be treated as `int`. Operations on them can overflow before assignment to a wider type. Bitmasks might not behave as expected on wider types if constants are `int`-sized.
+*   **Why it's a problem**: `1 << 32` is often 0 if `int` is 32-bit. `my_long &= ~0xFFFF0000` might clear more bits than intended. `long x = int_max * 2;` might store an overflowed int value.
+*   **Rule 7.1 (Use Suffixes for Wider Constants)**:
+    Use `L`, `LL`, `UL`, `ULL` suffixes for constants intended for `long`, `long long`, or unsigned wider types, especially in expressions and bitwise operations.
+    ```c
+    // long val = 2000000000 * 3; // BAD: int multiplication overflows before cast
+    // long val_ok = 2000000000L * 3; // GOOD
+    // unsigned long mask = ~0xFF000000UL; // GOOD: ~ operates on unsigned long
+    // long shift_val = 1L << 35; // GOOD
+    ```
+*   **Rule 7.2 (Cast Operands Before Operation for Wider Result)**:
+    To prevent overflow in intermediate calculations stored in a wider type, cast at least one operand to the wider type *before* the operation.
+    ```c
+    // From 64bit_issue_rule.txt: 3.1.3.5 (int_to_long_overflow_of_int_06)
+    // int int1 = 0x7fffffff, int2 = 2;
+    // long long1 = (long)int1 * int2; // GOOD
+    // long long2 = (long)(int1 * int2); // BAD: int1*int2 overflows first
+    ```
+*   **Rule 7.3 (Beware of Platform-Dependent Constant Interpretation)**:
+    Avoid expressions like `long1 += 0xffffffff;` where `0xffffffff` behaves differently as `int` vs. `unsigned int` when promoted. Use explicitly typed constants like `-1L`. (Ref: 64bit_issue_rule.txt 3.1.3.7, 3.1.3.16)
+*   **Rule 7.4 (Int-Sized Constants in Bitwise Operations)**:
+    Constants like `0xFFFF0000` are `int` by default. `~0xFFFF0000` results in `0x0000FFFF`. If `my_long_var &= ~0xFFFF0000;` is used, it clears the upper 48 bits of `my_long_var` on a 64-bit system, not just bits 16-31. Use `~0xFFFF0000UL` or `~( (unsigned long)0xFFFF0000 )`. (Ref: 64bit_issue_rule.txt 3.1.3.8)
+
+### 8. Bitfields
+
+*   **Explanation**: Standard base types for bitfields are `(_Bool, int, signed int, unsigned int)`. Using `long` is an extension.
+*   **Why it's a problem**: If `long` changes size, behavior might change. Layout is compiler-dependent.
+*   **Rule 8.1 (Standard Bitfield Types)**:
+    Stick to standard base types. Ensure widths don't exceed base type width.
+*   **Rule 8.2 (Manual Bit Manipulation for Wider Fields)**:
+    For fields wider than `unsigned int`, use manual bitwise operations on `uint64_t`.
+
+### 9. Preprocessor Macros and Conditional Compilation
+
+*   **Explanation**: Custom macros might hardcode type size assumptions.
+*   **Why it's a problem**: Incorrect behavior on different architectures.
+*   **Rule 9.1 (Rely on Standard Macros/Types)**:
+    Use `size_t`, `uintptr_t`, `UINTPTR_MAX`, `SIZE_MAX`.
+*   **Rule 9.2 (Use Standardized Predefined Macros for Arch Detection)**:
+    If conditional compilation is needed, use compiler-provided macros like `_WIN64`, `__LP64__`.
+
+### 10. Pointer Type Casting and Dereferencing (Incompatible Types)
+
+*   **Explanation**: Casting `long*` to `int*` and dereferencing reads only part of the `long`. Casting `int*` to `long*` and dereferencing reads beyond the `int`.
+*   **Why it's a problem**: Data corruption, crashes.
+*   **Rule 10.1 (No Dereferencing After Incompatible Pointer Casts)**:
+    **STRICTLY AVOID** casting between pointers to types of different sizes (e.g., `int*` to `long*`) if the resulting pointer will be dereferenced. Use `memcpy` for type-punning if necessary. (Ref: 64bit_issue_rule.txt 3.1.3.10)
+*   **Example (Bad cast and dereference)**:
+    ```c
+    // From 64bit_issue_rule.txt: 3.1.3.10
+    // long long_val = 0x1122334455667788L;
+    // int *pint1 = (int *)&long_val;
+    // int val = *pint1; // val gets 0x55667788 on little-endian
+
+    // long *plong1;
+    // int int_val_source = 0x12345678;
+    // plong1 = (long *)&int_val_source;
+    // long val2 = *plong1; // Reads beyond int_val_source, UB
+    ```
+
+### 11. Implicit `int` Types and Function Prototypes
+
+*   **Explanation**: K&R C allowed implicit `int` types for variables and function returns. Functions called without prototypes were assumed to return `int`.
+*   **Why it's a problem**: A function returning `void*` (64-bit pointer) might be implicitly assumed to return `int` (32-bit), truncating the pointer.
+*   **Rule 11.1 (Explicit Typing and Prototyping)**:
+    1.  **ALWAYS** provide explicit types for all variable declarations.
+    2.  **ALWAYS** ensure all functions have explicit return types.
+    3.  **ALWAYS** declare or define functions (provide a prototype) *before* their first call.
+*   **Example (Implicit function return type - Bad)**:
+    ```c
+    // From 64bit_issue_rule.txt: 3.1.3.12 (myalloc example)
+    // // p = myalloc(size); // myalloc called before prototype, assumed to return int
+    // ...
+    // void *myalloc(int n) { /* actual definition returns void* */ ... }
+    ```
+
+### 12. Magic Numbers
+
+*   **Explanation**: Using hardcoded numbers like `4` for `sizeof(pointer)` or `0xFFFFFFFF` for `-1`.
+*   **Why it's a problem**: `4` is wrong for 8-byte pointers. `0xFFFFFFFF` as `size_t` is not `(size_t)-1` on 64-bit systems.
+*   **Rule 12.1 (Use `sizeof`)**:
+    Always use `sizeof(type)` or `sizeof(variable)` instead of hardcoded sizes.
+    ```c
+    // From 64bit_issue_rule.txt: 3.1.3.14
+    // Bad: pointerArray = (int **) malloc(num * 4);
+    // Good: pointerArray = (int **) malloc(num * sizeof(int *));
+    // Or: pointerArray = (int **) malloc(num * sizeof(*pointerArray));
+    ```
+*   **Rule 12.2 (Typed Error Codes/Sentinels)**:
+    Define error codes with appropriate types, e.g., `#define MY_SIZE_T_ERROR ((size_t)-1)`. (Ref: 64bit_issue_rule.txt 3.1.3.14, 3.1.3.16)
+    ```c
+    // From 64bit_issue_rule.txt: 3.1.3.14 (magic_using_8f_as_negative_one_16)
+    // Bad: #define ERROR_CODE 0xffffffff
+    //      if (mysize(size) == (size_t)-1) // Compares (size_t)0xFFFFFFFF with (size_t)-1
+    // Good: #define ERROR_CODE_SZT ((size_t)-1)
+    //       if (mysize(size) == ERROR_CODE_SZT)
+    ```
+
+### 13. `offsetof` Macro
+
+*   **Explanation**: The `offsetof` macro from `<stddef.h>` returns `size_t`. Custom implementations should also result in `size_t`.
+*   **Why it's a problem**: Custom `offsetof` implementations casting intermediate pointer results to `unsigned int` can truncate addresses on 64-bit systems.
+*   **Rule 13.1 (Use Standard `offsetof` or `size_t`-Correct Custom Macro)**:
+    Prefer standard `offsetof`. If custom, ensure the result is `size_t` and internal pointer arithmetic is safe (e.g., using `char*` for byte differences).
+    ```c
+    // From 64bit_issue_rule.txt: 3.1.3.17 (example of potentially problematic custom offsetof)
+    // #define OFFSET_BAD(type, member)    (unsigned int)&(((type *)0)->member) // BAD: cast to unsigned int
+    
+    // Standard:
+    #include <stddef.h>
+    // size_t offset = offsetof(MyStruct, member_name);
+
+    // Conceptually safer custom:
+    // #define CUSTOM_OFFSETOF(TYPE, MEMBER) ((size_t)((char *)&((TYPE *)0)->MEMBER - (char *)0))
+    ```
+
+## Best Practices Summary
+
+1.  **Semantic Types**: Use `size_t`, `ptrdiff_t`, `(u)intptr_t`.
+2.  **Fixed-Width Integers**: Use `<stdint.h>` types (`intN_t`, `uintN_t`) for exact sizes.
+3.  **Format Specifiers**: Use correct ones, including `<inttypes.h>` macros.
+4.  **Pointers**: Avoid casting to `int`/`long`. Use `(u)intptr_t` if cast is essential.
+5.  **`long` vs. `long long`**: Use `long long` or `int64_t` for portable 64-bit integers.
+6.  **Serialization**: Serialize struct members individually for I/O.
+7.  **Compiler Warnings**: Enable and heed comprehensive warnings (see below).
+8.  **Test**: Test on both 32-bit and 64-bit platforms.
+
+## Recommended Compiler Warnings for Verification
+
+Enable stringent compiler warnings to catch potential issues:
+*   General: `-Wall -Wextra -pedantic` (or `-Wpedantic-errors`)
+*   64-bit/Type Safety: `-Wconversion -Wsign-conversion -Wint-conversion`
+*   Overflows: `-Woverflow -Wshift-overflow` (or `-Wshift-count-overflow`)
+*   Formatting/Pointers: `-Wformat=2 -Wformat-security -Wpointer-arith -Wcast-qual -Wcast-align`
+*   Modern C: `-Wmissing-prototypes -Wimplicit-function-declaration` (usually an error in C99+)
+*   Optional: `-Werror` (treat all warnings as errors)
+
+## References
+
+*   The C Standard (ISO/IEC 9899)
+*   `<stdint.h>` - Standard integer types: [https://en.cppreference.com/w/c/types/integer](https://en.cppreference.com/w/c/types/integer)
+*   `<inttypes.h>` - Format conversion of integer types: [https://en.cppreference.com/w/c/types/integer_format](https://en.cppreference.com/w/c/types/integer_format)
+*   64-bit Data Models: [https://en.wikipedia.org/wiki/64-bit_computing#64-bit_data_models](https://en.wikipedia.org/wiki/64-bit_computing#64-bit_data_models)
+*   CERT C Coding Standard (INT and MEM sections): [https://wiki.sei.cmu.edu/confluence/display/c/SEI+CERT+C+Coding+Standard](https://wiki.sei.cmu.edu/confluence/display/c/SEI+CERT+C+Coding+Standard)

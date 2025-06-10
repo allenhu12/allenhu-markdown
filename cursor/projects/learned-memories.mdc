@@ -1,0 +1,298 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Project Memory
+
+This file stores project-specific knowledge, conventions, and user preferences learned by the AI assistant.
+
+## User Preferences
+
+## Technical Decisions
+
+### SSH Implementation Migration (Dropbear to OpenSSH)
+
+**Context:** The unleashed system needs to replace dropbear with OpenSSH for FIPS SKU APs only, while maintaining all existing functionality.
+
+**Key Information:**
+
+1. **Dropbear `-e` option**: Custom Ruckus modification that specifies an alternative shell/program to execute when a user connects.
+   - Example: `-e /bin/login_from_umm.sh`
+   - OpenSSH equivalent: `ForceCommand` directive in `sshd_config`
+   - Note: Do NOT use authorized_keys with command= as it's per-key, not global
+
+2. **Multiple SSH Instances**: System runs two dropbear daemons on different ports (22 and 8022) with different configurations.
+   - Solution: Use multiple `sshd_config` files (e.g., `sshd_config_port22`, `sshd_config_port8022`)
+   - Start each with: `/usr/sbin/sshd -f /etc/ssh/sshd_config_portXXXX`
+
+3. **FIPS SKU Detection**:
+   - Function: `rsm_isFipsSku()` in `librsm/src/rsm_fips.c`
+   - Reads: `/proc/sys/crypto/fips_sku`
+   - Returns: 1 if FIPS SKU, 0 otherwise
+
+4. **Implementation Constants** (in `librsm/include/rsm_fips.h`):
+   ```
+   DROPBEAR_SCP_PATH: "/usr/bin/scp"
+   OPENSSH_SCP_PATH: "/usr/sbin/scp"
+   DROPBEAR_HOSTKEY_CHECK: "-y"
+   OPENSSH_HOSTKEY_CHECK: "-o StrictHostKeyChecking=no"
+   OPENSSH_HOSTKEY_CHECK_IGNORE: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+   DROPBEAR_SSH_TUNNEL_KEY_PATH: "/tmp/dataKey"
+   OPENSSH_SSH_TUNNEL_KEY_PATH: "/conf/user-certs/key.pem" (WIFI7) or "/writable/data/user-certs/key.pem"
+   ```
+
+5. **Additional Path Constants** (from `rsm_ssh_telnet.h`):
+   ```
+   RSM_DROPBEAR_FILE: "/usr/sbin/dropbear"
+   RSM_SSHD_FILE: "/usr/sbin/sshd"
+   RSM_DROPBEAR_PIDFILE: "/var/run/dropbear.pid"
+   RSM_SSHD_PIDFILE: "/var/run/sshd.pid"
+   RSM_LOGIN_EXEC: "/usr/bin/-rkscli" (default) or "/bin/sh" (VAP_NO_PASSPHRASE)
+   ```
+
+6. **Current Implementation**: Uses compile-time `#ifdef RKS_OPENSSH` to select SSH implementation.
+   - Needs change to: Runtime detection based on `rsm_isFipsSku()`
+
+7. **Key Files to Modify**:
+   - `librsm/src/rsm_sshd.c` - Main SSH server management
+   - `librsm/src/rsm_debug.c` - Crash dump upload via SCP
+   - `librsm/src/rsm_rccd.c` - PCAP file upload via SCP
+   - `controller/ac/usr/system/adapter_system.c` - Contains dropbear command execution
+   - `controller/ac/usr/libsrc/emf/emf_adapter.cc` - Contains dropbear command execution
+   - `controller/ac/usr/system/sys_wrapper.sh` - Contains dbclient commands
+
+8. **Complete Dropbear Options Mapping**:
+   - `-p %s` (Port) → OpenSSH: `Port` directive in sshd_config
+   - `-P /path/to/pidfile` → OpenSSH: `PidFile` directive in sshd_config
+   - `-e /path/to/shell` → OpenSSH: `ForceCommand /path/to/shell` in sshd_config
+   - `-I 900` (Idle timeout in seconds) → OpenSSH: `ClientAliveInterval 15` + `ClientAliveCountMax 60` (15*60=900)
+   - `-r /path/to/hostkey` → OpenSSH: `HostKey /path/to/hostkey` in sshd_config
+   - `-j` (Disable local port forwarding) → OpenSSH: `AllowTcpForwarding no` or more granular
+   - `-k` (Disable remote port forwarding) → OpenSSH: `AllowTcpForwarding no` or more granular
+   - `-A none` → OpenSSH: `PasswordAuthentication no`, review authentication settings
+
+9. **Complete dbclient Options Mapping**:
+   - `-y` (Accept any host key) → `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`
+   - `-f` (Fork to background) → `ssh -f`
+   - `-N` (No remote command) → `ssh -N`
+   - `-T` (Disable pseudo-tty) → `ssh -T`
+   - `-R port:host:hostport` (Remote forward) → `ssh -R port:host:hostport`
+   - `-L port:host:hostport` (Local forward) → `ssh -L port:host:hostport`
+   - `-l username` → `ssh -l username` or `ssh username@host`
+   - `-p port` → `ssh -p port`
+   - `-K interval` (Keepalive) → `ssh -o ServerAliveInterval=interval`
+   - `-i identity_file` → `ssh -i identity_file`
+
+10. **Example Commands Found**:
+    - Dropbear: `/usr/sbin/dropbear -p 127.0.0.1:%d -P /var/run/dropbear_debug.pid -e /bin/login_from_umm.sh -I 900 -r /writable/data/dropbear/dropbear_rsa_key -j -k -A none`
+    - dbclient: `dbclient -y -f -N -T -R $4:localhost:443 -l $1 $3 >/dev/null 2>&1`
+    - URS_call_dbclient: `dbclient -R "$1" -p "$2" -K 5 -y -N -f -i "$3" "$4"`
+    - Interactive session: `empty -f -L "${EMPTY_TMP}" -i "${EMPTY_IN}" -o "${EMPTY_OUT}" dbclient -y -l "${USERNAME}" "${ICX_IP}"`
+
+11. **Host Key Management**:
+    - Dropbear keys location: `/certs/dropbear/` (WIFI7) or `/writable/data/dropbear/`
+    - Key file: `dropbear_rsa_key`
+    - Key generation: `dropbearkey -t rsa -s 2048 -f <file>`
+    - Key conversion: `dropbearconvert openssh dropbear <src> <dst>` (currently used to convert FROM OpenSSH TO dropbear)
+    - OpenSSH keys need to be in OpenSSH format, may need conversion
+    - Note: System already has OpenSSH key paths defined (OPENSSH_RSAKEY_PATH)
+
+12. **SCPD Service** (Special SCP daemon):
+    - Port: 7222
+    - PID file: `/tmp/var/run/scpd.pid`
+    - Uses authentication file: `/tmp/dbuser_account`
+    - Dropbear command: `dropbear -P /tmp/var/run/scpd.pid -p 7222 -R -j -k -A file:/tmp/dbuser_account`
+    - OpenSSH command: `sshd -h /path/to/hostkey -o PidFile=/tmp/var/run/scpd.pid -p 7222 -A file:/tmp/dbuser_account`
+
+13. **SSH Service Types**:
+    - Main SSH service (port 22)
+    - Debug/UMM tunnels (dynamic ports, typically listening on 127.0.0.1:8022)
+    - SCPD service (port 7222)
+    - Each may have different authentication and configuration requirements
+
+14. **FIPS-Related SSH Behavior**:
+    - Function `rsm_set_fips_sshd()` controls SSH availability
+    - FIPS APs disable SSH when connected to SZ, enable when disconnected
+    - Marker file: `/ruckuswireless/etc/system/sshd_disabled_fips` or `/writable/etc/system/sshd_disabled_fips`
+    - rsm_fipsmode_init() checks FIPS SKU and handles initialization
+
+15. **Host Key Paths**:
+    - DEFAULT_RSAKEY: `/certs/dropbear/dropbear_rsa_key` (WIFI7) or `/writable/data/dropbear/dropbear_rsa_key`
+    - OPENSSH_RSAKEY: `/certs/openssh/ssh_host_rsa_key` (WIFI7) or `/writable/data/openssh/ssh_host_rsa_key`
+
+16. **IPv6 Support in SCP Commands**:
+    - IPv4 format: `scp -y -i /tmp/dataKey file.tar sshtunnel@192.168.1.1:/path/`
+    - IPv6 format: `scp -y -i /tmp/dataKey file.tar sshtunnel@\\[fe80::1\\]:/path/`
+    - Code uses `rsm_c_isNumericIP()` to detect IP format (PF_INET vs PF_INET6)
+
+17. **SCP Mode Parameter**:
+    - OpenSSH uses `-O` flag for legacy SCP protocol
+    - Dropbear uses no flag (empty string)
+    - This difference is handled in the code with a `mode` variable
+
+18. **Method 3: Command-line Specification** (Alternative to config files):
+    ```bash
+    # Port 22 instance
+    /usr/sbin/sshd -p 22 -o "ForceCommand=/bin/login_script_for_port22.sh" -o "PidFile=/var/run/sshd_port22.pid"
+    
+    # Port 8022 instance  
+    /usr/sbin/sshd -p 8022 -o "ForceCommand=/bin/login_script_for_port8022.sh" -o "PidFile=/var/run/sshd_port8022.pid"
+    ```
+
+19. **Important Implementation Note**:
+    - Dropbear `-e` option is a custom Ruckus modification (guarded by `#ifdef RKS_FD`)
+    - The dropbear implementation "bypasses authentication to launch 'rkscli', where login authentication takes place"
+    - This is why `-j -k` flags are used to disable port forwarding (security consideration)
+
+20. **Build System Considerations**:
+    - Currently uses `#ifdef RKS_OPENSSH` for compile-time selection
+    - Need to ensure both dropbear and OpenSSH binaries are included in FIPS builds
+    - Runtime selection should be implemented in addition to (not replacing) compile-time flags
+
+### SSH Host Key Authentication Deep Dive
+
+**Overview:** SSH host key authentication is a critical security mechanism that ensures clients connect to the correct server and not an imposter. It's the server showing its cryptographic ID to the client.
+
+#### Key Components:
+1. **Host Keys**: Cryptographic key pairs (public/private) that uniquely identify a server
+2. **Known Hosts File**: Client's "address book" of trusted servers (`~/.ssh/known_hosts`)
+3. **Fingerprint**: SHA256 hash of the public key for human verification
+
+#### Security Problems Prevented:
+1. **Man-in-the-Middle (MITM) Attacks**: Prevents attackers from intercepting connections
+2. **Server Impersonation**: Prevents malicious actors from setting up fake servers
+3. **Data Interception**: Protects all commands, passwords, and data from theft
+4. **Credential Theft**: Prevents authentication credentials from being captured
+
+#### Two-Phase Authentication Model:
+
+**Phase 1: Server Authentication (Host Key Exchange)**
+- Purpose: Client verifies server identity
+- Method: Host key signature
+- When: During initial connection setup
+
+**Phase 2: User Authentication (After Key Exchange)**
+- Purpose: Server verifies client/user identity  
+- Method: Password, public key, or keyboard-interactive
+- When: After secure channel is established
+
+#### The Cryptographic Process:
+
+1. **Diffie-Hellman Exchange**: Both sides generate DH parameters
+2. **Hash Construction**: All exchange parameters are hashed together, including:
+   - Client version string (e.g., "SSH-2.0-dropbear_2018.76")
+   - Server version string
+   - Client KEX_INIT packet
+   - Server KEX_INIT packet
+   - Server's host key
+   - Client's DH public value (f)
+   - Server's DH public value (e)
+   - Shared secret (K) from DH
+
+3. **Digital Signature**: Server signs the hash with its private host key
+4. **Signature Verification**: Client verifies signature using server's public host key
+
+#### Why Only Server Signs:
+
+The asymmetric authentication design protects against different threats:
+- **Server signing**: Prevents MITM attacks (most critical during connection setup)
+- **Client authentication**: Happens after secure channel is established (less vulnerable to MITM)
+- The signature includes contributions from BOTH client and server (via the hash)
+
+#### Legacy Algorithm Issues (Dropbear 2018.76):
+
+**Problem**: Modern OpenSSH clients have deprecated weak algorithms that older Dropbear servers still use.
+
+**Common Negotiation Failures**:
+1. Key Exchange: Server offers `diffie-hellman-group14-sha1`, client has removed it
+2. MAC Algorithms: Server offers `hmac-sha1`, client has removed it
+3. Host Key Types: Server offers `ssh-rsa`, client prefers newer algorithms
+
+**Solution for Connecting to Legacy Servers**:
+```bash
+ssh -oKexAlgorithms=+diffie-hellman-group14-sha1 \
+    -oHostKeyAlgorithms=+ssh-rsa \
+    -oMACs=+hmac-sha1 \
+    user@legacy-server
+```
+
+**Important**: These options only affect the single client connection and do NOT compromise local SSH server security.
+
+#### OpenSSH Algorithm Handling:
+
+**Key Distinction**: Available/Supported vs Enabled by Default
+
+1. **Available Algorithms** (compiled in):
+   ```bash
+   ssh -Q mac           # All available MACs
+   ssh -Q kex           # All available key exchange
+   ssh -Q cipher        # All available ciphers  
+   ssh -Q key           # All available key types
+   ```
+
+2. **Default Enabled Algorithms**:
+   ```bash
+   ssh -G hostname | grep -E "(kex|mac|cipher|hostkeyalgorithms)"
+   ```
+
+3. **The `+` Syntax**: Adds an algorithm to the default list temporarily:
+   - `=algorithm` replaces the entire list (dangerous)
+   - `+algorithm` adds to the default list (safer)
+   - `-algorithm` removes from the default list
+
+#### Algorithm Evolution Timeline:
+- **OpenSSH 7.0**: Started deprecating SHA-1 based algorithms
+- **OpenSSH 8.2** (Feb 2020): Removed `diffie-hellman-group14-sha1` from defaults
+- **OpenSSH 8.5**: Further restrictions on legacy algorithms
+- **Modern versions**: Only enable algorithms considered cryptographically strong
+
+#### Host Key Storage in Dropbear:
+
+From the codebase analysis:
+- Host keys stored in: `/certs/dropbear/dropbear_rsa_key` or `/writable/data/dropbear/dropbear_rsa_key`
+- Key generation: `dropbearkey -t rsa -s 2048 -f <file>`
+- Client verification function: `checkhostkey()` in `cli-kex.c`
+- Server signature generation: `send_msg_kexdh_reply()` in `svr-kex.c`
+
+#### Known Hosts Format:
+```
+hostname,ip-address ssh-rsa AAAAB3NzaC1yc2EAAAA...base64-encoded-public-key...
+```
+
+#### Security Best Practices:
+1. Always verify host key fingerprints on first connection
+2. Use strong, modern algorithms when possible
+3. Only enable legacy algorithms for specific connections to legacy servers
+4. Keep SSH client and server software updated
+5. Monitor for unexpected host key changes (potential MITM indicator)
+
+## Project Conventions
+
+## Implementation Notes
+
+### Process Management Considerations
+- Dropbear uses PID files like `/var/run/dropbear_debug.pid`
+- OpenSSH should use similar PID files for consistency
+- Process detection logic needs updating to handle both `dropbear` and `sshd` processes
+- The `dbclient_name` is defined as "dbclient -R" for process searching
+- Important note: "dbclient takes child process to apply the command which made by itself, so the pid number we forked is not the accurate dbclient pid"
+- Functions to update: `CheckTunnelExist()`, `GetProcessPidFromShell()`, `CheckPortProcessExist()`
+- May use `killall -9 dbclient` or `killall sshd` for cleanup
+
+### OpenSSH Configuration Approach
+- Recommended: Use separate config files for each service type (Method 1 from examples)
+- Each config file should have its own Port, PidFile, and ForceCommand settings
+- This provides clear separation and easier debugging
+
+### Security Note
+- The current system uses `-A none` (no authentication) with dropbear, relying on the ForceCommand script for authentication
+- OpenSSH implementation should carefully review authentication settings to maintain security while meeting requirements
+- Port forwarding is explicitly disabled in dropbear (`-j -k`) due to security concerns with the authentication bypass approach
+
+### Implementation Strategy Summary
+1. Keep both dropbear and OpenSSH binaries in the system
+2. Add runtime detection function: `rsm_should_use_openssh()` that returns `rsm_isFipsSku()`
+3. Update all SSH/SCP invocation points to use runtime detection
+4. Create appropriate sshd_config files for each service type
+5. Test thoroughly on both FIPS and non-FIPS SKUs
